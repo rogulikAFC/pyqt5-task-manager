@@ -1,5 +1,5 @@
 import sys
-from time import sleep
+from datetime import datetime
 
 from PyQt5.QtCore import Qt, QRect
 from PyQt5.QtSql import QSqlDatabase, QSqlQuery, QSqlTableModel
@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import QMainWindow, QApplication, QSpinBox,\
     QDateTimeEdit, QPushButton, QLabel
 from PyQt5 import uic
 
-from design import Ui_MainWindow, StringBox
+from design1 import Ui_MainWindow, StringBox
 
 con = QSqlDatabase.addDatabase('QSQLITE')
 con.setDatabaseName('db.sqlite3')
@@ -33,6 +33,18 @@ class MainWindow(QMainWindow):
 
         self.all_tasks = self.findChild(
             QVBoxLayout, 'tasks_layout'
+        )
+
+        self.all_tasks.setAlignment(Qt.AlignTop)
+
+        self.tasks_page = 0
+
+        self.next_page_btn = self.findChild(
+            QPushButton, 'pushButton_2'
+        )
+
+        self.last_page_btn = self.findChild(
+            QPushButton, 'pushButton_3'
         )
 
         self.name_inp = self.findChild(
@@ -63,18 +75,73 @@ class MainWindow(QMainWindow):
             self.create_task
         )
 
+        self.next_page_btn.clicked.connect(
+            self.plus_change_page
+        )
+
+        self.last_page_btn.clicked.connect(
+            self.minus_change_page
+        )
+
+        self.set_all_tasks()
+
+        for i in range(self.all_tasks.count()):
+            widget = self.all_tasks.itemAt(i).widget()
+            widget.clicked.connect(
+                self.view_task
+            )
+
+    def plus_change_page(self):
+        print(f'page is {self.tasks_page}')
+
+        print(f'set all tasks is {self.set_all_tasks()}')
+
+        self.tasks_page += 1
+
+        if self.set_all_tasks() is not False:
+            if self.tasks_page > len(self.get_all_tasks()):
+                self.tasks_page -= 1
+
+        else:
+            self.tasks_page -= 1
+
+    def minus_change_page(self):
+        print(f'page is {self.tasks_page}')
+
+        if self.tasks_page <= 0:
+            return None
+
+        self.tasks_page -= 1
         self.set_all_tasks()
 
     def set_all_tasks(self):
         all_tasks_list = self.get_all_tasks()
 
-        for task in all_tasks_list:
+        try:
+            page_tasks_list = all_tasks_list[
+                self.tasks_page
+            ]
+
+        except:
+            return False
+
+        while self.all_tasks.count():
+            child = self.all_tasks.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        for task in page_tasks_list:
             button = QPushButton()
             self.all_tasks.addWidget(button)
 
             for key, value in task.items():
                 if key == 'name':
                     button.setText(value)
+
+                elif key == 'id':
+                    button.setObjectName(f'task_{value}')
+
+        return True
 
     def get_all_tasks(self):
         if not con.open():
@@ -96,7 +163,14 @@ class MainWindow(QMainWindow):
                 }
             )
 
-        return tasks_list
+        chunk_size = 4
+
+        final_list = list()
+
+        for i in range(0, len(tasks_list), chunk_size):
+            final_list.append(tasks_list[i:i+chunk_size])
+
+        return final_list
 
     def create_task(self):
         if not con.open():
@@ -114,12 +188,6 @@ class MainWindow(QMainWindow):
         )
         datetime = self.datetime.dateTime().toPyDateTime()
 
-        print(name)
-        print(description)
-        print(category)
-        print(status)
-        print(type(datetime))
-
         status_id = con.exec(
             f'SELECT id FROM statuses WHERE name="{status}";'
         )
@@ -130,10 +198,8 @@ class MainWindow(QMainWindow):
         )
         category_id.first()
 
-        print(category_id.value(0), status_id.value(0))
-
         con.exec(
-            f'INSERT INTO tasks (name, category_id, status_id, deadline) VALUES ("{name}", {category_id.value(0)}, {status_id.value(0)}, datetime("{str(datetime)}"));'
+            f'INSERT INTO tasks (name, description, category_id, status_id, deadline) VALUES ("{name}", "{description}", {category_id.value(0)}, {status_id.value(0)}, datetime("{str(datetime)}"));'
         )
 
         self.set_all_tasks()
@@ -149,6 +215,7 @@ class MainWindow(QMainWindow):
         #     CREATE TABLE tasks (
         #         id INTEGER PRIMARY KEY AUTOINCREMENT,
         #         name TEXT NOT NULL,
+        #         description TEXT,
         #         category_id INTEGER NOT NULL REFERENCES categories (id) ON DELETE CASCADE ON UPDATE CASCADE,
         #         status_id INTEGER NOT NULL REFERENCES statuses (id) ON DELETE CASCADE ON UPDATE CASCADE,
         #         deadline DATETIME
@@ -158,12 +225,62 @@ class MainWindow(QMainWindow):
 
         print('clicked')
 
+    def view_task(self):
+        task_id = self.sender().objectName().\
+            split('_')[1]
+
+        task = con.exec(
+            f'SELECT * FROM tasks WHERE id="{task_id}"'
+        )
+        task.first()
+
+        name = task.value(1)
+        description = task.value(2)
+        category_id = task.value(3)
+        status_id = task.value(4)
+        deadline = task.value(5)
+
+        deadline_datetime = datetime.strptime(
+            deadline, '%Y-%m-%d %H:%M:%S'
+        )
+
+        category = con.exec(
+            f'SELECT name FROM categories WHERE id={category_id}'
+        )
+        category.first()
+        print(category.value(0))
+        print(self.category_inp.values)
+
+        status = con.exec(
+            f'SELECT name FROM statuses WHERE id={status_id}'
+        )
+        status.first()
+        print(self.status_inp.values)
+        print(status.value(0))
+
+        global category_for_inp, status_for_inp
+        category_for_inp = int()
+        status_for_inp = int()
+
+        for value, value_id in self.category_inp.values.items():
+            if value == category.value(0):
+                category_for_inp = value_id
+
+        for value, value_id in self.status_inp.values.items():
+            if value == status.value(0):
+                status_for_inp = value_id
+
+        print(name, description, category_id, status_id, deadline)
+
+        self.name_inp.setText(name)
+        self.description_inp.setPlainText(description)
+        self.category_inp.setValue(category_for_inp)
+        self.status_inp.setValue(status_for_inp)
+        self.datetime.setDate(deadline_datetime)
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
-    # ui = Ui_MainWindow()
     window = MainWindow()
-    # ui.setupUi(window)
-    # window.load_elements()
     window.show()
     sys.exit(app.exec_())
