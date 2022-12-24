@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import QMainWindow, QApplication, QSpinBox,\
     QDateTimeEdit, QPushButton, QLabel
 from PyQt5 import uic
 
-from design1 import Ui_MainWindow, StringBox
+from design2 import Ui_MainWindow, StringBox
 
 con = QSqlDatabase.addDatabase('QSQLITE')
 con.setDatabaseName('db.sqlite3')
@@ -71,6 +71,10 @@ class MainWindow(QMainWindow):
             QPushButton, 'change_btn'
         )
 
+        self.new_task_btn = self.findChild(
+            QPushButton, 'new_task_btn'
+        )
+
         self.change_btn.clicked.connect(
             self.create_task
         )
@@ -83,13 +87,12 @@ class MainWindow(QMainWindow):
             self.minus_change_page
         )
 
-        self.set_all_tasks()
+        self.new_task_btn.clicked.connect(
+            self.unselect_task
+        )
 
-        for i in range(self.all_tasks.count()):
-            widget = self.all_tasks.itemAt(i).widget()
-            widget.clicked.connect(
-                self.view_task
-            )
+        self.set_all_tasks()
+        self.selected_task = False
 
     def plus_change_page(self):
         print(f'page is {self.tasks_page}')
@@ -140,6 +143,13 @@ class MainWindow(QMainWindow):
 
                 elif key == 'id':
                     button.setObjectName(f'task_{value}')
+                    print(value)
+
+        for i in range(self.all_tasks.count()):
+            widget = self.all_tasks.itemAt(i).widget()
+            widget.clicked.connect(
+                self.view_task
+            )
 
         return True
 
@@ -163,7 +173,7 @@ class MainWindow(QMainWindow):
                 }
             )
 
-        chunk_size = 4
+        chunk_size = 17
 
         final_list = list()
 
@@ -186,7 +196,7 @@ class MainWindow(QMainWindow):
         status = self.status_inp.textFromValue(
             self.status_inp.value()
         )
-        datetime = self.datetime.dateTime().toPyDateTime()
+        deadline = self.datetime.dateTime().toPyDateTime()
 
         status_id = con.exec(
             f'SELECT id FROM statuses WHERE name="{status}";'
@@ -198,10 +208,44 @@ class MainWindow(QMainWindow):
         )
         category_id.first()
 
+        if self.selected_task:
+
+            columns = con.exec(
+                'PRAGMA table_info(tasks)'
+            )
+
+            keys_list = list()
+
+            while columns.next():
+                keys_list.append(columns.value(1))
+
+            for key, value in zip(
+                keys_list,
+                [self.selected_task, name, description,
+                 category_id.value(0), status_id.value(0), deadline]
+            ):
+                if type(value) is str:
+                    con.exec(
+                        f'UPDATE tasks SET {key}="{value}" WHERE id={self.selected_task}'
+                    )
+
+                elif type(value) is int:
+                    con.exec(
+                        f'UPDATE tasks SET {key}={value} WHERE id={self.selected_task}'
+                    )
+
+                print(key, value)
+
+            self.unselect_task()
+            self.set_all_tasks()
+
+            return None
+
         con.exec(
-            f'INSERT INTO tasks (name, description, category_id, status_id, deadline) VALUES ("{name}", "{description}", {category_id.value(0)}, {status_id.value(0)}, datetime("{str(datetime)}"));'
+            f'INSERT INTO tasks (name, description, category_id, status_id, deadline) VALUES ("{name}", "{description}", {category_id.value(0)}, {status_id.value(0)}, datetime("{str(deadline)}"));'
         )
 
+        self.unselect_task()
         self.set_all_tasks()
 
         # con.exec(
@@ -224,10 +268,15 @@ class MainWindow(QMainWindow):
         # )
 
         print('clicked')
+        return None
 
     def view_task(self):
+        print(self.sender().objectName())
         task_id = self.sender().objectName().\
             split('_')[1]
+
+        self.selected_task = task_id
+        print(self.selected_task)
 
         task = con.exec(
             f'SELECT * FROM tasks WHERE id="{task_id}"'
@@ -277,6 +326,21 @@ class MainWindow(QMainWindow):
         self.category_inp.setValue(category_for_inp)
         self.status_inp.setValue(status_for_inp)
         self.datetime.setDate(deadline_datetime)
+
+    def unselect_task(self):
+        self.selected_task = False
+        self.name_inp.setText('Название задачи')
+        self.description_inp.setPlainText('Описание задачи')
+        self.category_inp.setValue(1)
+        self.status_inp.setValue(1)
+
+        self.datetime.setDate(
+            datetime.strptime(
+                '01-01-2000 0:00', '%d-%m-%Y %H:%M'
+            )
+        )
+
+        print(self.selected_task)
 
 
 if __name__ == '__main__':
