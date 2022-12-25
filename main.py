@@ -111,6 +111,10 @@ class MainWindow(QMainWindow):
             QListWidget, 'category_scroll_vl'
         )
 
+        self.find_tasks_button = self.findChild(
+            QPushButton, 'find_tasks_btn'
+        )
+
         self.change_btn.clicked.connect(
             self.create_task
         )
@@ -134,6 +138,8 @@ class MainWindow(QMainWindow):
         self.categories_layout.itemActivated.connect(
             self.delete_category
         )
+
+        self.find_tasks_button.clicked.connect(self.filter_tasks)
 
         self.set_all_tasks()
         self.set_categories()
@@ -162,23 +168,51 @@ class MainWindow(QMainWindow):
         self.tasks_page -= 1
         self.set_all_tasks()
 
-    def set_all_tasks(self):
-        all_tasks_list = self.get_all_tasks()
+    def set_all_tasks(self, tasks: list[dict] = None):
+        print(tasks)
+
+        if not tasks:
+            all_tasks_list = self.get_all_tasks()
+            print('tasks is false')
+
+        # elif tasks == 'is_none':
+        #     print('is none')
+        #     while self.all_tasks.count():
+        #         child = self.all_tasks.takeAt(0)
+
+        #         if child.widget():
+        #             child.widget().deleteLater()
+
+        #     button = QPushButton()
+        #     button.setText('Ничего не найдено')
+        #     self.all_tasks.addWidget(button)
+        #     # button.clicked.connect(self.set_all_tasks)
+
+        #     return False
+
+        else:
+            all_tasks_list = tasks
+            print('lol')
 
         try:
             page_tasks_list = all_tasks_list[
                 self.tasks_page
             ]
+            print('page_tasks_list is true')
 
         except:
-            return False
+            self.tasks_page = 0
+            self.set_all_tasks(all_tasks_list)
+            return None
 
         while self.all_tasks.count():
             child = self.all_tasks.takeAt(0)
+
             if child.widget():
                 child.widget().deleteLater()
 
         for task in page_tasks_list:
+            print(task)
             button = QPushButton()
             self.all_tasks.addWidget(button)
 
@@ -190,6 +224,9 @@ class MainWindow(QMainWindow):
                     button.setObjectName(f'task_{value}')
                     print(value)
 
+                elif key == 'slot':
+                    button.clicked.connect(value)
+
         for i in range(self.all_tasks.count()):
             widget = self.all_tasks.itemAt(i).widget()
             widget.clicked.connect(
@@ -198,7 +235,7 @@ class MainWindow(QMainWindow):
 
         return True
 
-    def get_all_tasks(self):
+    def get_all_tasks(self, chunk_size: int = 17) -> list[dict]:
         all_tasks_query = con.exec(
             'SELECT * FROM tasks;'
         )
@@ -210,18 +247,111 @@ class MainWindow(QMainWindow):
                 {
                     'id': all_tasks_query.value(0),
                     'name': all_tasks_query.value(1),
-                    'date': all_tasks_query.value(4)
+                    # 'date': all_tasks_query.value(4),
+                    'category_id': all_tasks_query.value(3),
+                    'status_id': all_tasks_query.value(4)
                 }
             )
 
-        chunk_size = 17
+        if chunk_size:
+            final_list = list()
 
-        final_list = list()
+            for i in range(0, len(tasks_list), chunk_size):
+                final_list.append(tasks_list[i:i+chunk_size])
 
-        for i in range(0, len(tasks_list), chunk_size):
-            final_list.append(tasks_list[i:i+chunk_size])
+            print('final_list')
+            return final_list
 
-        return final_list
+        else:
+            return tasks_list
+
+    def filter_tasks(self, tasks_list: list[dict] = None, chunk_size: int = 17) -> list[dict]:
+        print(tasks_list)
+
+        if not tasks_list:
+            tasks_list = self.get_all_tasks(False)
+
+        category_name = self.category_select.textFromValue(
+            self.category_select.value()
+        )
+        status_name = self.status_select.textFromValue(
+            self.status_select.value()
+        )
+        print(category_name, status_name)
+
+        status_obj = con.exec(
+            f'SELECT id FROM statuses WHERE name="{status_name}"'
+        )
+        status_obj.first()
+        status = status_obj.value(0)
+
+        category_obj = con.exec(
+            f'SELECT id FROM categories WHERE name="{category_name}"'
+        )
+        category_obj.first()
+        category = category_obj.value(0)
+
+        same_category = list()
+        same_status = list()
+
+        for task in tasks_list:
+            for key, value in task.items():
+                if key == 'category_id':
+                    if value == category:
+                        same_category.append(task)
+
+                elif key == 'status_id':
+                    if value == status:
+                        same_status.append(task)
+
+        sorted_list = list()
+
+        for task in same_category:
+            for key, value in task.items():
+                if key == 'status_id':
+                    if value == status:
+                        sorted_list.append(task)
+
+        for task in same_status:
+            for key, value in task.items():
+                if key == 'category_id':
+                    if value == category:
+                        sorted_list.append(task)
+
+        print(sorted_list)
+
+        if len(sorted_list) == 0:
+            self.set_all_tasks(
+                [[
+                    {
+                        'id': 1,
+                        'name': 'Ничего не найдено. Нажмите, чтобы показать все',
+                        'slot': self.set_all_tasks
+                    }
+                ]]
+            )
+
+            return None
+
+        sorted2_list = list()
+
+        for task in sorted_list:
+            if task in sorted2_list:
+                continue
+
+            else:
+                sorted2_list.append(task)
+
+        print(sorted2_list)
+
+        if chunk_size:
+            final_list = list()
+
+            for i in range(0, len(sorted2_list), chunk_size):
+                final_list.append(sorted2_list[i:i+chunk_size])
+
+            print(len(final_list))
+            self.set_all_tasks(final_list)
 
     def create_task(self):
         if not con.open():
