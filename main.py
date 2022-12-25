@@ -5,7 +5,8 @@ from PyQt5.QtCore import Qt, QRect
 from PyQt5.QtSql import QSqlDatabase, QSqlQuery, QSqlTableModel
 from PyQt5.QtWidgets import QMainWindow, QApplication, QSpinBox,\
     QVBoxLayout, QLineEdit, QPlainTextEdit,\
-    QDateTimeEdit, QPushButton, QLabel
+    QDateTimeEdit, QPushButton, QLabel, QHBoxLayout,\
+    QScrollArea, QListWidget, QListWidgetItem
 from PyQt5 import uic
 
 from design2 import Ui_MainWindow, StringBox
@@ -22,6 +23,25 @@ class MainWindow(QMainWindow):
 
         ui = Ui_MainWindow()
         ui.setupUi(self)
+
+        if not con.open():
+            print('db couldnt open')
+            return None
+
+        # con.exec(
+        #     """
+        #     ALTER TABLE tasks
+        #     DROP FOREIGN KEY category_id;
+        #     """
+        # )
+
+        # con.exec(
+        #     """
+        #     ALTER TABLE tasks
+        #     ADD CONSTRAINT category_id
+        #         INTEGER REFERENCES categories (id) ON DELETE CASCADE ON UPDATE CASCADE;
+        #     """
+        # )
 
         self.category_select = self.findChild(
             StringBox, 'category_select'
@@ -75,6 +95,22 @@ class MainWindow(QMainWindow):
             QPushButton, 'new_task_btn'
         )
 
+        self.category_name_inp = self.findChild(
+            QLineEdit, 'category_name_inp'
+        )
+
+        self.new_category_btn = self.findChild(
+            QPushButton, 'new_category_btn'
+        )
+
+        self.category_scroll = self.findChild(
+            QScrollArea, 'category_scroll'
+        )
+
+        self.categories_layout = self.findChild(
+            QListWidget, 'category_scroll_vl'
+        )
+
         self.change_btn.clicked.connect(
             self.create_task
         )
@@ -91,7 +127,16 @@ class MainWindow(QMainWindow):
             self.unselect_task
         )
 
+        self.new_category_btn.clicked.connect(
+            self.create_category
+        )
+
+        self.categories_layout.itemActivated.connect(
+            self.delete_category
+        )
+
         self.set_all_tasks()
+        self.set_categories()
         self.selected_task = False
 
     def plus_change_page(self):
@@ -154,10 +199,6 @@ class MainWindow(QMainWindow):
         return True
 
     def get_all_tasks(self):
-        if not con.open():
-            print('db couldnt open')
-            return None
-
         all_tasks_query = con.exec(
             'SELECT * FROM tasks;'
         )
@@ -341,6 +382,60 @@ class MainWindow(QMainWindow):
         )
 
         print(self.selected_task)
+
+    def set_categories(self):
+        self.categories_layout.clear()
+
+        categories = con.exec(
+            'SELECT * FROM categories'
+        )
+
+        categories_list = list()
+
+        while categories.next():
+            item = QListWidgetItem(categories.value(1))
+            categories_list.append(categories.value(1))
+            self.categories_layout.addItem(item)
+
+        print(categories_list)
+        self.category_inp.setStrings(categories_list)
+        self.category_select.setStrings(categories_list)
+
+    def create_category(self):
+        cat_name = self.category_name_inp.text()
+
+        con.exec(
+            f'INSERT INTO categories (name) VALUES ("{cat_name}")'
+        )
+
+        self.set_categories()
+        self.unselect_task()
+        print('lol')
+
+    def delete_category(self, item):
+        category_name = item.text()
+
+        category = con.exec(
+            f'SELECT id FROM categories WHERE name="{category_name}"'
+        )
+
+        category.first()
+        category_id = category.value(0)
+
+        con.exec(
+            f'DELETE FROM categories WHERE name="{category_name}"'
+        )
+
+        self.set_categories()
+
+        con.exec(
+            f'DELETE FROM tasks WHERE category_id={category_id}'
+        )
+
+        self.set_all_tasks()
+        self.unselect_task()
+
+        print(f'category {category_name} deleted')
 
 
 if __name__ == '__main__':
