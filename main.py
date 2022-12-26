@@ -1,13 +1,16 @@
 import sys
 from datetime import datetime
+import json
 
-from PyQt5.QtCore import Qt, QRect
-from PyQt5.QtSql import QSqlDatabase, QSqlQuery, QSqlTableModel
+from PyQt5.QtCore import Qt
+from PyQt5.QtSql import QSqlDatabase
 from PyQt5.QtWidgets import QMainWindow, QApplication, QSpinBox,\
     QVBoxLayout, QLineEdit, QPlainTextEdit,\
-    QDateTimeEdit, QPushButton, QLabel, QHBoxLayout,\
-    QScrollArea, QListWidget, QListWidgetItem
+    QDateTimeEdit, QPushButton, QCheckBox, \
+    QScrollArea, QListWidget, QListWidgetItem, \
+    QMessageBox, QSystemTrayIcon, QMenu, QAction
 from PyQt5 import uic
+from PyQt5 import QtGui
 
 from design2 import Ui_MainWindow, StringBox
 
@@ -115,6 +118,14 @@ class MainWindow(QMainWindow):
             QPushButton, 'find_tasks_btn'
         )
 
+        self.in_tray_option = self.findChild(
+            QCheckBox, 'in_tray_option'
+        )
+
+        self.notifications_option = self.findChild(
+            QCheckBox, 'notifications_option'
+        )
+
         self.change_btn.clicked.connect(
             self.create_task
         )
@@ -139,11 +150,42 @@ class MainWindow(QMainWindow):
             self.delete_category
         )
 
-        self.find_tasks_button.clicked.connect(self.filter_tasks)
+        self.find_tasks_button.clicked.connect(
+            self.filter_tasks
+        )
+
+        self.notifications_option.stateChanged.connect(
+            self.change_settings
+        )
+
+        self.in_tray_option.stateChanged.connect(
+            self.change_settings
+        )
 
         self.set_all_tasks()
         self.set_categories()
+        self.load_settings()
         self.selected_task = False
+
+        icon = QtGui.QIcon(u'./icon.png')
+
+        tray = QSystemTrayIcon(icon, self)
+        tray.setToolTip('Task manager')
+        tray.setVisible(True)
+
+        tray_menu = QMenu()
+        tell_quotation = QAction(
+            'Скажи мотивирующую цитату!', self
+        )
+        tell_quotation.triggered.connect(
+            lambda: print('hello world')
+        )
+
+        tray_menu.addAction(
+            tell_quotation
+        )
+
+        tray.setContextMenu(tray_menu)
 
     def plus_change_page(self):
         print(f'page is {self.tasks_page}')
@@ -175,21 +217,6 @@ class MainWindow(QMainWindow):
             all_tasks_list = self.get_all_tasks()
             print('tasks is false')
 
-        # elif tasks == 'is_none':
-        #     print('is none')
-        #     while self.all_tasks.count():
-        #         child = self.all_tasks.takeAt(0)
-
-        #         if child.widget():
-        #             child.widget().deleteLater()
-
-        #     button = QPushButton()
-        #     button.setText('Ничего не найдено')
-        #     self.all_tasks.addWidget(button)
-        #     # button.clicked.connect(self.set_all_tasks)
-
-        #     return False
-
         else:
             all_tasks_list = tasks
             print('lol')
@@ -216,28 +243,64 @@ class MainWindow(QMainWindow):
             button = QPushButton()
             self.all_tasks.addWidget(button)
 
+            is_system = False
+
             for key, value in task.items():
                 if key == 'name':
                     button.setText(value)
 
+                elif key == 'is_system':
+                    is_system = True
+
                 elif key == 'id':
-                    button.setObjectName(f'task_{value}')
-                    print(value)
+                    if not is_system:
+                        button.setObjectName(f'task_{value}')
+                        print(value)
+
+                    if is_system:
+                        button.setObjectName('system_button')
+                        print(value)
+
+                elif key == 'status_id':
+                    color = str()
+
+                    if value == 1:  # В процессе
+                        color = '#BAE7C3'   # light green
+
+                    elif value == 2:    # Отложено
+                        color = '#D5BAE7'   # light purple
+
+                    elif value == 3:    # Завершено
+                        color = '#E7A3A3'   # light red
+
+                    print(color)
+
+                    button.setStyleSheet(
+                        f'background-color: "{color}"'
+                    )
 
                 elif key == 'slot':
                     button.clicked.connect(value)
 
         for i in range(self.all_tasks.count()):
             widget = self.all_tasks.itemAt(i).widget()
-            widget.clicked.connect(
-                self.view_task
-            )
+
+            if widget.objectName() != 'system_button':
+                widget.clicked.connect(
+                    self.view_task
+                )
+                widget.setContextMenuPolicy(
+                    Qt.CustomContextMenu
+                )
+                widget.customContextMenuRequested.connect(
+                    self.delete_task
+                )
 
         return True
 
     def get_all_tasks(self, chunk_size: int = 17) -> list[dict]:
         all_tasks_query = con.exec(
-            'SELECT * FROM tasks;'
+            'SELECT * FROM tasks ORDER BY status_id;'
         )
 
         tasks_list = list()
@@ -324,9 +387,10 @@ class MainWindow(QMainWindow):
             self.set_all_tasks(
                 [[
                     {
+                        'is_system': True,
                         'id': 1,
                         'name': 'Ничего не найдено. Нажмите, чтобы показать все',
-                        'slot': self.set_all_tasks
+                        'slot': self.set_all_tasks,
                     }
                 ]]
             )
@@ -552,20 +616,141 @@ class MainWindow(QMainWindow):
         category.first()
         category_id = category.value(0)
 
-        con.exec(
-            f'DELETE FROM categories WHERE name="{category_name}"'
+        tasks = con.exec(
+            f'SELECT name FROM tasks WHERE category_id={category_id}'
         )
 
-        self.set_categories()
+        tasks_list = list()
 
-        con.exec(
-            f'DELETE FROM tasks WHERE category_id={category_id}'
+        while tasks.next():
+            print(tasks.value(0))
+            tasks_list.append(
+                tasks.value(0)
+            )
+
+        tasks_str = ''
+        joins = 0
+        not_joined = 0
+
+        if len(tasks_list) > 0:
+            for task in tasks_list:
+                if joins == 0:
+                    tasks_str += f'"{task}"'
+
+                elif joins > 0:
+                    if joins > 5:
+                        not_joined += 1
+
+                    else:
+                        tasks_str += f', "{task}"'
+
+                joins += 1
+
+            if joins > 5:
+                tasks_str += f' и еще {not_joined} задач'
+
+        else:
+            tasks_str = 'Категория пуста'
+
+        message_box = QMessageBox()
+        message_box.setIcon(QMessageBox.Question)
+        message_box.setWindowTitle(
+            f'Удалить категорию "{category_name}"?'
         )
+
+        if len(tasks_list) > 0:
+            message_box.setText(
+                f'Вместе с ней удалятся {tasks_str}'
+            )
+        else:
+            message_box.setText(
+                tasks_str
+            )
+
+        message_box.setStandardButtons(
+            QMessageBox.Ok | QMessageBox.Cancel
+        )
+
+        retval = message_box.exec_()
+
+        if retval == 4194304:   # cancel
+            return None
+
+        elif retval == 1024:    # accept
+            print('accepted')
+
+            con.exec(
+                f'DELETE FROM categories WHERE name="{category_name}"'
+            )
+
+            self.set_categories()
+
+            con.exec(
+                f'DELETE FROM tasks WHERE category_id={category_id}'
+            )
+
+            self.set_all_tasks()
+            self.unselect_task()
+
+            print(f'category {category_name} deleted')
+
+    def delete_task(self):
+        task = self.sender()
+        task_id = task.objectName().split('_')[1]
+        print(task_id)
+
+        message_box = QMessageBox()
+        message_box.setIcon(QMessageBox.Question)
+        message_box.setWindowTitle(
+            f'Удаление задачи'
+        )
+        message_box.setText(
+            f'Удалить "{task.text()}"?'
+        )
+        message_box.setStandardButtons(
+            QMessageBox.Ok | QMessageBox.Cancel
+        )
+
+        retval = message_box.exec_()
+
+        if retval == 4194304:   # cancel
+            return None
+
+        elif retval == 1024:    # accept
+            print('accepted')
+
+            con.exec(
+                f'DELETE FROM tasks WHERE id={task_id}'
+            )
 
         self.set_all_tasks()
         self.unselect_task()
 
-        print(f'category {category_name} deleted')
+    def load_settings(self):
+        settings_file = open('settings.json')
+        settings_data = json.load(
+            settings_file
+        )
+
+        in_tray = settings_data.get('in_tray')
+        notifications = settings_data.get('notifications')
+
+        self.in_tray_option.setChecked(in_tray)
+        self.notifications_option.setChecked(notifications)
+
+    def change_settings(self):
+        in_tray = self.in_tray_option.isChecked()
+        notifications = self.notifications_option.isChecked()
+
+        print(in_tray, notifications)
+
+        new_settings = {
+            'in_tray': in_tray,
+            'notifications': notifications
+        }
+
+        settings_file = open('settings.json', 'w')
+        settings_file.write(json.dumps(new_settings))
 
 
 if __name__ == '__main__':
