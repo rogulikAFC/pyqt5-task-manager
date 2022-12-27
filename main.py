@@ -1,8 +1,15 @@
 import sys
 from datetime import datetime
 import json
+from time import sleep
 
-from PyQt5.QtCore import Qt
+from quotations_scrapper import random_quotation
+from design2 import Ui_MainWindow, StringBox
+
+import schedule
+
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtCore import QThread
 from PyQt5.QtSql import QSqlDatabase
 from PyQt5.QtWidgets import QMainWindow, QApplication, QSpinBox,\
     QVBoxLayout, QLineEdit, QPlainTextEdit,\
@@ -12,7 +19,6 @@ from PyQt5.QtWidgets import QMainWindow, QApplication, QSpinBox,\
 from PyQt5 import uic
 from PyQt5 import QtGui
 
-from design2 import Ui_MainWindow, StringBox
 
 con = QSqlDatabase.addDatabase('QSQLITE')
 con.setDatabaseName('db.sqlite3')
@@ -22,10 +28,13 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
 
-        self.setWindowTitle('Task manager')
-
         ui = Ui_MainWindow()
         ui.setupUi(self)
+
+        icon = QtGui.QIcon(u'./icon.png')
+
+        self.setWindowTitle('Task manager')
+        self.setWindowIcon(icon)
 
         if not con.open():
             print('db couldnt open')
@@ -169,23 +178,50 @@ class MainWindow(QMainWindow):
 
         icon = QtGui.QIcon(u'./icon.png')
 
-        tray = QSystemTrayIcon(icon, self)
-        tray.setToolTip('Task manager')
-        tray.setVisible(True)
+        self.tray = QSystemTrayIcon(icon, self)
+        self.tray.setToolTip('Task manager')
+        self.tray.setVisible(True)
 
-        tray_menu = QMenu()
+        self.tray_menu = QMenu()
+
         tell_quotation = QAction(
             'Скажи мотивирующую цитату!', self
         )
         tell_quotation.triggered.connect(
-            lambda: print('hello world')
+            self.show_quotation_msg
         )
 
-        tray_menu.addAction(
+        self.tray_menu.addAction(
             tell_quotation
         )
 
-        tray.setContextMenu(tray_menu)
+        show = QAction('Открыть', self)
+        show.triggered.connect(
+            self.show
+        )
+        self.tray_menu.addAction(show)
+
+        self.tray.setContextMenu(self.tray_menu)
+
+        self.dedline_checker = TaskReminder()
+
+        self.notification_timer = QTimer()
+        self.notification_timer.timeout.connect(
+            self.dedline_checker.start
+        )
+        self.notification_timer.start(5000)
+
+        # self.connect(
+        #     self.dedline_checker,
+        #     self.dedline_checker.notification_signal,
+        #     self.show_notification
+        # )
+
+        self.dedline_checker.notification_signal.connect(
+            self.show_notification
+        )
+
+        self.unselect_task()
 
     def plus_change_page(self):
         print(f'page is {self.tasks_page}')
@@ -211,21 +247,16 @@ class MainWindow(QMainWindow):
         self.set_all_tasks()
 
     def set_all_tasks(self, tasks: list[dict] = None):
-        print(tasks)
-
         if not tasks:
             all_tasks_list = self.get_all_tasks()
-            print('tasks is false')
 
         else:
             all_tasks_list = tasks
-            print('lol')
 
         try:
             page_tasks_list = all_tasks_list[
                 self.tasks_page
             ]
-            print('page_tasks_list is true')
 
         except:
             self.tasks_page = 0
@@ -255,11 +286,9 @@ class MainWindow(QMainWindow):
                 elif key == 'id':
                     if not is_system:
                         button.setObjectName(f'task_{value}')
-                        print(value)
 
                     if is_system:
                         button.setObjectName('system_button')
-                        print(value)
 
                 elif key == 'status_id':
                     color = str()
@@ -272,8 +301,6 @@ class MainWindow(QMainWindow):
 
                     elif value == 3:    # Завершено
                         color = '#E7A3A3'   # light red
-
-                    print(color)
 
                     button.setStyleSheet(
                         f'background-color: "{color}"'
@@ -296,6 +323,12 @@ class MainWindow(QMainWindow):
                     self.delete_task
                 )
 
+        # try:
+        #     self.dedline_checker.get_names_and_dates()
+
+        # except:
+        #     print('cannot set deadline reminder')
+
         return True
 
     def get_all_tasks(self, chunk_size: int = 17) -> list[dict]:
@@ -310,7 +343,7 @@ class MainWindow(QMainWindow):
                 {
                     'id': all_tasks_query.value(0),
                     'name': all_tasks_query.value(1),
-                    # 'date': all_tasks_query.value(4),
+                    'date': all_tasks_query.value(5),
                     'category_id': all_tasks_query.value(3),
                     'status_id': all_tasks_query.value(4)
                 }
@@ -322,7 +355,6 @@ class MainWindow(QMainWindow):
             for i in range(0, len(tasks_list), chunk_size):
                 final_list.append(tasks_list[i:i+chunk_size])
 
-            print('final_list')
             return final_list
 
         else:
@@ -469,6 +501,11 @@ class MainWindow(QMainWindow):
                         f'UPDATE tasks SET {key}={value} WHERE id={self.selected_task}'
                     )
 
+                if type(value) is datetime:
+                    con.exec(
+                        f'UPDATE tasks SET {key}=datetime("{value}") WHERE id={self.selected_task}'
+                    )
+
                 print(key, value)
 
             self.unselect_task()
@@ -560,7 +597,7 @@ class MainWindow(QMainWindow):
         self.description_inp.setPlainText(description)
         self.category_inp.setValue(category_for_inp)
         self.status_inp.setValue(status_for_inp)
-        self.datetime.setDate(deadline_datetime)
+        self.datetime.setDateTime(deadline_datetime)
 
     def unselect_task(self):
         self.selected_task = False
@@ -569,10 +606,11 @@ class MainWindow(QMainWindow):
         self.category_inp.setValue(1)
         self.status_inp.setValue(1)
 
-        self.datetime.setDate(
-            datetime.strptime(
-                '01-01-2000 0:00', '%d-%m-%Y %H:%M'
-            )
+        self.datetime.setDateTime(
+            # datetime.strptime(
+            #     '01-01-2000 0:00', '%d-%m-%Y %H:%M'
+            # )
+            datetime.now()
         )
 
         print(self.selected_task)
@@ -752,9 +790,98 @@ class MainWindow(QMainWindow):
         settings_file = open('settings.json', 'w')
         settings_file.write(json.dumps(new_settings))
 
+    def show_quotation_msg(self):
+        message_box = QMessageBox()
+        message_box.setIcon(QMessageBox.Information)
+        message_box.setWindowTitle(
+            'Цитата'
+        )
+        message_box.setText(
+            random_quotation()
+        )
+
+        message_box.exec_()
+
+    def show_notification(self, signal):
+        if not self.notifications_option.isChecked():
+            return None
+
+        notification = QMessageBox()
+        notification.setWindowTitle(
+            'Task manager'
+        )
+        notification.setText(
+            f'До дедлайна задачи "{signal[0]}" осталось {signal[1]} минут(a)'
+        )
+        notification.setIcon(
+            notification.Information
+        )
+        notification.exec_()
+
+    def closeEvent(self, event):
+        if self.in_tray_option.isChecked():
+            event.ignore()
+            self.hide()
+            app.setQuitOnLastWindowClosed(False)
+
+        else:
+            app.setQuitOnLastWindowClosed(True)
+
+
+class TaskReminder(QThread):
+    notification_signal = pyqtSignal(list)
+
+    def __init__(self):
+        super().__init__(parent=app)
+
+        self.tasks = self.get_names_and_dates()
+        self.notifications_list = list()
+
+    def get_names_and_dates(self) -> dict:
+        tasks = con.exec(
+            'SELECT name, deadline, status_id FROM tasks'
+        )
+
+        final_dict = dict()
+
+        while tasks.next():
+            date = datetime.strptime(
+                tasks.value(1), '%Y-%m-%d %H:%M:%S'
+            )
+            status_id = tasks.value(2)
+
+            if status_id != 3:
+                final_dict[tasks.value(0)] = date
+
+        self.tasks = final_dict
+        return final_dict
+
+    def run(self):
+        tasks = self.get_names_and_dates()
+
+        now = datetime.now()
+
+        for task, deadline in tasks.items():
+            near = deadline - now
+            print(near)
+            near_days = near.days
+
+            if near_days == 0:
+                near_minutes = int(near.total_seconds() // 60)
+
+                if near_minutes > 0 and near_minutes <= 15:
+                    if task not in self.notifications_list:
+                        print(task)
+
+                        self.notifications_list.append(task)
+                        self.notification_signal.emit(
+                            [task, near_minutes]
+                        )
+
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
+
     sys.exit(app.exec_())
