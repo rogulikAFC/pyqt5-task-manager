@@ -1,22 +1,18 @@
 import sys
 from datetime import datetime
 import json
-from time import sleep
 
 from quotations_scrapper import random_quotation
 from design2 import Ui_MainWindow, StringBox
 
-import schedule
-
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtCore import QThread
-from PyQt5.QtSql import QSqlDatabase
+from PyQt5.QtSql import QSqlDatabase, QSqlQuery
 from PyQt5.QtWidgets import QMainWindow, QApplication, QSpinBox,\
     QVBoxLayout, QLineEdit, QPlainTextEdit,\
     QDateTimeEdit, QPushButton, QCheckBox, \
     QScrollArea, QListWidget, QListWidgetItem, \
     QMessageBox, QSystemTrayIcon, QMenu, QAction
-from PyQt5 import uic
 from PyQt5 import QtGui
 
 
@@ -39,21 +35,6 @@ class MainWindow(QMainWindow):
         if not con.open():
             print('db couldnt open')
             return None
-
-        # con.exec(
-        #     """
-        #     ALTER TABLE tasks
-        #     DROP FOREIGN KEY category_id;
-        #     """
-        # )
-
-        # con.exec(
-        #     """
-        #     ALTER TABLE tasks
-        #     ADD CONSTRAINT category_id
-        #         INTEGER REFERENCES categories (id) ON DELETE CASCADE ON UPDATE CASCADE;
-        #     """
-        # )
 
         self.category_select = self.findChild(
             StringBox, 'category_select'
@@ -171,13 +152,12 @@ class MainWindow(QMainWindow):
             self.change_settings
         )
 
-        self.set_all_tasks()
+        self.set_tasks()
         self.set_categories()
         self.load_settings()
         self.selected_task = False
 
-        icon = QtGui.QIcon(u'./icon.png')
-
+        # Добавление трея
         self.tray = QSystemTrayIcon(icon, self)
         self.tray.setToolTip('Task manager')
         self.tray.setVisible(True)
@@ -203,6 +183,7 @@ class MainWindow(QMainWindow):
 
         self.tray.setContextMenu(self.tray_menu)
 
+        # Добавление проверки дедлайнов, уведомлений
         self.dedline_checker = TaskReminder()
 
         self.notification_timer = QTimer()
@@ -211,26 +192,27 @@ class MainWindow(QMainWindow):
         )
         self.notification_timer.start(5000)
 
-        # self.connect(
-        #     self.dedline_checker,
-        #     self.dedline_checker.notification_signal,
-        #     self.show_notification
-        # )
-
         self.dedline_checker.notification_signal.connect(
-            self.show_notification
+            self.show_deadline_msg
+        )
+
+        # Сброс фильтров задач по нажатию ПКМ
+        self.find_tasks_button.setContextMenuPolicy(
+            Qt.CustomContextMenu
+        )
+        self.find_tasks_button.customContextMenuRequested.connect(
+            self.drop_filters
         )
 
         self.unselect_task()
 
     def plus_change_page(self):
-        print(f'page is {self.tasks_page}')
-
-        print(f'set all tasks is {self.set_all_tasks()}')
-
+        """
+        Прокрутка страницы задач вперед
+        """
         self.tasks_page += 1
 
-        if self.set_all_tasks() is not False:
+        if self.set_tasks() is not False:
             if self.tasks_page > len(self.get_all_tasks()):
                 self.tasks_page -= 1
 
@@ -238,15 +220,21 @@ class MainWindow(QMainWindow):
             self.tasks_page -= 1
 
     def minus_change_page(self):
-        print(f'page is {self.tasks_page}')
-
+        """
+        Прокрутка страницы задач назад
+        """
         if self.tasks_page <= 0:
             return None
 
         self.tasks_page -= 1
-        self.set_all_tasks()
+        self.set_tasks()
 
-    def set_all_tasks(self, tasks: list[dict] = None):
+    def set_tasks(self, tasks: list[dict] = None) -> bool:
+        """
+        Загрузка задач в GUI
+        """
+
+        # Определение списка задач для загрузки
         if not tasks:
             all_tasks_list = self.get_all_tasks()
 
@@ -260,25 +248,47 @@ class MainWindow(QMainWindow):
 
         except:
             self.tasks_page = 0
-            self.set_all_tasks(all_tasks_list)
-            return None
+            page_tasks_list = list()
 
+            if len(all_tasks_list) == 0:
+                page_tasks_list.append(
+                    {
+                        'is_system': True,
+                        'id': False,
+                        'name': 'Список задач пустой',
+                    }
+                )
+
+            else:
+                self.set_tasks(all_tasks_list)
+                return None
+
+        # Очистка задач в GUI
         while self.all_tasks.count():
             child = self.all_tasks.takeAt(0)
 
             if child.widget():
                 child.widget().deleteLater()
 
+        # Обработка полученного списка задач, загрузка в GUI
         for task in page_tasks_list:
-            print(task)
             button = QPushButton()
             self.all_tasks.addWidget(button)
 
             is_system = False
 
             for key, value in task.items():
+                # Установка свойств кнопки задачи
+
                 if key == 'name':
                     button.setText(value)
+
+                # Проверка на то, системная ли кнопка
+                # Например, кнопка "Ничего не найдено" будет системной.
+                # Это значит, что к ней не применяется свойство цвета,
+                # даётся специальное имя объекта (system_button)
+                # и стандартный слот (просмотр задачи) заменен на специальный,
+                # указанный в поле "slot"
 
                 elif key == 'is_system':
                     is_system = True
@@ -291,6 +301,8 @@ class MainWindow(QMainWindow):
                         button.setObjectName('system_button')
 
                 elif key == 'status_id':
+                    # Установка цвета кнопки в зависимости от статуса задачи
+
                     color = str()
 
                     if value == 1:  # В процессе
@@ -307,15 +319,20 @@ class MainWindow(QMainWindow):
                     )
 
                 elif key == 'slot':
+                    # Установка специального слота
                     button.clicked.connect(value)
 
         for i in range(self.all_tasks.count()):
             widget = self.all_tasks.itemAt(i).widget()
 
             if widget.objectName() != 'system_button':
+                # Установка стандартных слотов на несистемные кнопки
+
                 widget.clicked.connect(
                     self.view_task
                 )
+
+                # Нажатие ПКМ на кнопку задачи
                 widget.setContextMenuPolicy(
                     Qt.CustomContextMenu
                 )
@@ -323,19 +340,20 @@ class MainWindow(QMainWindow):
                     self.delete_task
                 )
 
-        # try:
-        #     self.dedline_checker.get_names_and_dates()
-
-        # except:
-        #     print('cannot set deadline reminder')
-
         return True
 
     def get_all_tasks(self, chunk_size: int = 17) -> list[dict]:
+        """
+        Получение всех задач из БД, результат упаковывается в специальный список
+        с набором свойств для каждой задачи. 
+        """
+
+        # Получение всех задач из БД
         all_tasks_query = con.exec(
             'SELECT * FROM tasks ORDER BY status_id;'
         )
 
+        # Создание списка со свойствами задач
         tasks_list = list()
 
         while all_tasks_query.next():
@@ -349,6 +367,7 @@ class MainWindow(QMainWindow):
                 }
             )
 
+        # Деление списка задач на страницы, если задан параметр "chunk_size"
         if chunk_size:
             final_list = list()
 
@@ -361,31 +380,52 @@ class MainWindow(QMainWindow):
             return tasks_list
 
     def filter_tasks(self, tasks_list: list[dict] = None, chunk_size: int = 17) -> list[dict]:
-        print(tasks_list)
+        """
+        Фильтрация всех задач по id статуса и id категории
+        """
 
         if not tasks_list:
             tasks_list = self.get_all_tasks(False)
 
+        # Получение категории и статуса для фильтрации
         category_name = self.category_select.textFromValue(
             self.category_select.value()
         )
         status_name = self.status_select.textFromValue(
             self.status_select.value()
         )
-        print(category_name, status_name)
 
-        status_obj = con.exec(
-            f'SELECT id FROM statuses WHERE name="{status_name}"'
+        # Получение названия статуса и категории
+        # Будет использовано для соотнесения названия и id статуса и категории
+        status_obj = QSqlQuery()
+        status_obj.prepare(
+            """
+            SELECT id FROM statuses WHERE name=?
+            """
         )
+
+        status_obj.addBindValue(status_name)
+        status_obj.exec()
         status_obj.first()
+
+        # Название статуса
         status = status_obj.value(0)
 
-        category_obj = con.exec(
-            f'SELECT id FROM categories WHERE name="{category_name}"'
+        category_obj = QSqlQuery()
+        category_obj.prepare(
+            """
+            SELECT id FROM categories WHERE name=?
+            """
         )
+        category_obj.addBindValue(category_name)
+        category_obj.exec()
         category_obj.first()
+
+        # Название категории
         category = category_obj.value(0)
 
+        # Разделение задач на те, у которых та же категория, что и фильтре
+        # и на те, у которых тот же статус, что и в фильтре
         same_category = list()
         same_status = list()
 
@@ -399,6 +439,7 @@ class MainWindow(QMainWindow):
                     if value == status:
                         same_status.append(task)
 
+        # Список задач, которые подошли под фильтр
         sorted_list = list()
 
         for task in same_category:
@@ -413,22 +454,23 @@ class MainWindow(QMainWindow):
                     if value == category:
                         sorted_list.append(task)
 
-        print(sorted_list)
-
+        # Если ничего не подошло под фильтр, то создается системная кнопка,
+        # сбрасывающая фильтры
         if len(sorted_list) == 0:
-            self.set_all_tasks(
+            self.set_tasks(
                 [[
                     {
                         'is_system': True,
                         'id': 1,
                         'name': 'Ничего не найдено. Нажмите, чтобы показать все',
-                        'slot': self.set_all_tasks,
+                        'slot': self.drop_filters,
                     }
                 ]]
             )
 
             return None
 
+        # Избавление от совпадений в sorted_list
         sorted2_list = list()
 
         for task in sorted_list:
@@ -438,23 +480,31 @@ class MainWindow(QMainWindow):
             else:
                 sorted2_list.append(task)
 
-        print(sorted2_list)
-
+        # Разделение отфильтрованных задач на страницы
         if chunk_size:
             final_list = list()
 
             for i in range(0, len(sorted2_list), chunk_size):
                 final_list.append(sorted2_list[i:i+chunk_size])
 
-            print(len(final_list))
-            self.set_all_tasks(final_list)
+            self.set_tasks(final_list)
+
+    def drop_filters(self):
+        """
+        Сброс фильтров задач
+        """
+        self.set_tasks()
+
+        # Установка стандартных значений полей выбора фильтров
+        self.status_select.setValue(0)
+        self.category_select.setValue(0)
 
     def create_task(self):
-        if not con.open():
-            print('db couldnt open')
+        """
+        Создание или изменение задачи
+        """
 
-            return None
-
+        # Обработка полей формы создания задачи
         name = self.name_inp.text()
         description = self.description_inp.toPlainText()
         category = self.category_inp.textFromValue(
@@ -465,18 +515,31 @@ class MainWindow(QMainWindow):
         )
         deadline = self.datetime.dateTime().toPyDateTime()
 
-        status_id = con.exec(
-            f'SELECT id FROM statuses WHERE name="{status}";'
+        # Получение id статуса и категории
+        # Будет использовано для соотнесения названия и id статуса и категории
+        status_id = QSqlQuery()
+        status_id.prepare(
+            """
+            SELECT id FROM statuses WHERE name=?
+            """
         )
+        status_id.addBindValue(status)
+        status_id.exec()
         status_id.first()
 
+        category_id = QSqlQuery()
         category_id = con.exec(
-            f'SELECT id FROM categories WHERE name="{category}";'
+            """
+            SELECT id FROM categories WHERE name=?
+            """
         )
+        category_id.addBindValue(category)
+        category_id.exec()
         category_id.first()
 
+        # Обновление задачи, если она выбрана
         if self.selected_task:
-
+            # Получение всех колонок таблицы задач
             columns = con.exec(
                 'PRAGMA table_info(tasks)'
             )
@@ -486,11 +549,13 @@ class MainWindow(QMainWindow):
             while columns.next():
                 keys_list.append(columns.value(1))
 
+            # Обновление задачи
             for key, value in zip(
                 keys_list,
                 [self.selected_task, name, description,
                  category_id.value(0), status_id.value(0), deadline]
             ):
+
                 if type(value) is str:
                     con.exec(
                         f'UPDATE tasks SET {key}="{value}" WHERE id={self.selected_task}'
@@ -506,53 +571,63 @@ class MainWindow(QMainWindow):
                         f'UPDATE tasks SET {key}=datetime("{value}") WHERE id={self.selected_task}'
                     )
 
-                print(key, value)
-
             self.unselect_task()
-            self.set_all_tasks()
+            self.set_tasks()
 
             return None
 
-        con.exec(
-            f'INSERT INTO tasks (name, description, category_id, status_id, deadline) VALUES ("{name}", "{description}", {category_id.value(0)}, {status_id.value(0)}, datetime("{str(deadline)}"));'
+        # Создание задачи
+        insert_task = QSqlQuery()
+        insert_task.prepare(
+            """
+            INSERT INTO tasks (name, description, category_id, status_id, deadline)
+            VALUES (?, ?, ?, ?, datetime(?))
+            """
         )
+        insert_task.addBindValue(name)
+        insert_task.addBindValue(description)
+        insert_task.addBindValue(
+            category_id.value(0)
+        )
+        insert_task.addBindValue(
+            status_id.value(0)
+        )
+        insert_task.addBindValue(
+            str(deadline)
+        )
+        insert_task.exec()
 
         self.unselect_task()
-        self.set_all_tasks()
+        self.set_tasks()
 
-        # con.exec(
-        #     """
-        #     DROP TABLE tasks;
-        #     """
-        # )
-
-        # con.exec(
-        #     """
-        #     CREATE TABLE tasks (
-        #         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        #         name TEXT NOT NULL,
-        #         description TEXT,
-        #         category_id INTEGER NOT NULL REFERENCES categories (id) ON DELETE CASCADE ON UPDATE CASCADE,
-        #         status_id INTEGER NOT NULL REFERENCES statuses (id) ON DELETE CASCADE ON UPDATE CASCADE,
-        #         deadline DATETIME
-        #     );
-        #     """
-        # )
-
-        print('clicked')
-        return None
+        # CREATE TABLE tasks (
+        #     id INTEGER PRIMARY KEY AUTOINCREMENT,
+        #     name TEXT NOT NULL,
+        #     description TEXT,
+        #     category_id INTEGER NOT NULL REFERENCES categories (id) ON DELETE CASCADE ON UPDATE CASCADE,
+        #     status_id INTEGER NOT NULL REFERENCES statuses (id) ON DELETE CASCADE ON UPDATE CASCADE,
+        #     deadline DATETIME
 
     def view_task(self):
-        print(self.sender().objectName())
+        """
+        Просмотр задачи
+        """
+
+        # Получение id задачи
         task_id = self.sender().objectName().\
             split('_')[1]
 
         self.selected_task = task_id
-        print(self.selected_task)
 
-        task = con.exec(
-            f'SELECT * FROM tasks WHERE id="{task_id}"'
+        # Получение данных задачи
+        task = QSqlQuery()
+        task.prepare(
+            """
+            SELECT * FROM tasks WHERE id=?
+            """
         )
+        task.addBindValue(task_id)
+        task.exec()
         task.first()
 
         name = task.value(1)
@@ -561,23 +636,36 @@ class MainWindow(QMainWindow):
         status_id = task.value(4)
         deadline = task.value(5)
 
-        deadline_datetime = datetime.strptime(
-            deadline, '%Y-%m-%d %H:%M:%S'
-        )
+        try:
+            deadline_datetime = datetime.strptime(
+                deadline, '%Y-%m-%d %H:%M:%S'
+            )
 
-        category = con.exec(
-            f'SELECT name FROM categories WHERE id={category_id}'
+        except:
+            deadline_datetime = datetime.strftime(
+                deadline, '%Y-%m-%d %H:%M:%S.%f'
+            )
+
+        # Получение индекса категории и статуса для их поля выбора
+        category = QSqlQuery()
+        category.prepare(
+            """
+            SELECT name FROM categories WHERE id=?
+            """
         )
+        category.addBindValue(category_id)
+        category.exec()
         category.first()
-        print(category.value(0))
-        print(self.category_inp.values)
 
-        status = con.exec(
-            f'SELECT name FROM statuses WHERE id={status_id}'
+        status = QSqlQuery()
+        status.prepare(
+            """
+            SELECT name FROM statuses WHERE id=?
+            """
         )
+        status.addBindValue(status_id)
+        status.exec()
         status.first()
-        print(self.status_inp.values)
-        print(status.value(0))
 
         global category_for_inp, status_for_inp
         category_for_inp = int()
@@ -591,8 +679,7 @@ class MainWindow(QMainWindow):
             if value == status.value(0):
                 status_for_inp = value_id
 
-        print(name, description, category_id, status_id, deadline)
-
+        # Установка данных задачи в GUI
         self.name_inp.setText(name)
         self.description_inp.setPlainText(description)
         self.category_inp.setValue(category_for_inp)
@@ -600,6 +687,9 @@ class MainWindow(QMainWindow):
         self.datetime.setDateTime(deadline_datetime)
 
     def unselect_task(self):
+        """
+        Сброс выбранной задачи
+        """
         self.selected_task = False
         self.name_inp.setText('Название задачи')
         self.description_inp.setPlainText('Описание задачи')
@@ -607,59 +697,84 @@ class MainWindow(QMainWindow):
         self.status_inp.setValue(1)
 
         self.datetime.setDateTime(
-            # datetime.strptime(
-            #     '01-01-2000 0:00', '%d-%m-%Y %H:%M'
-            # )
             datetime.now()
         )
 
-        print(self.selected_task)
-
     def set_categories(self):
+        """
+        Получение и загрузка категорий в GUI
+        """
+
+        # Очистка списка категорий в GUI
         self.categories_layout.clear()
 
+        # Получение списка категорий
         categories = con.exec(
             'SELECT * FROM categories'
         )
 
         categories_list = list()
 
+        # Установка категорий в GUI
         while categories.next():
             item = QListWidgetItem(categories.value(1))
             categories_list.append(categories.value(1))
             self.categories_layout.addItem(item)
 
-        print(categories_list)
+        # Обновление всех полей ввода категории
         self.category_inp.setStrings(categories_list)
         self.category_select.setStrings(categories_list)
 
     def create_category(self):
+        """
+        Создание категории
+        """
+
+        # Получение названия категории из формы
         cat_name = self.category_name_inp.text()
 
-        con.exec(
-            f'INSERT INTO categories (name) VALUES ("{cat_name}")'
+        category_insert = QSqlQuery()
+        category_insert.prepare(
+            """
+            INSERT INTO categories (name) VALUES (?)
+            """
         )
+        category_insert.addBindValue(cat_name)
+        category_insert.exec()
 
         self.set_categories()
         self.unselect_task()
-        print('lol')
 
     def delete_category(self, item):
+        """
+        Удаление категории
+        """
         category_name = item.text()
 
-        category = con.exec(
-            f'SELECT id FROM categories WHERE name="{category_name}"'
+        # Получение названия категории и задач в этой категории
+        category = QSqlQuery()
+        category.prepare(
+            """
+            SELECT id FROM categories WHERE name=?
+            """
         )
-
+        category.addBindValue(category_name)
+        category.exec()
         category.first()
         category_id = category.value(0)
 
-        tasks = con.exec(
-            f'SELECT name FROM tasks WHERE category_id={category_id}'
+        tasks = QSqlQuery()
+        tasks.prepare(
+            """
+            SELECT name FROM tasks WHERE category_id=?
+            """
         )
+        tasks.addBindValue(category_id)
+        tasks.exec()
 
         tasks_list = list()
 
+        # Получение списка задач для уведомления об удалении
         while tasks.next():
             print(tasks.value(0))
             tasks_list.append(
@@ -690,6 +805,7 @@ class MainWindow(QMainWindow):
         else:
             tasks_str = 'Категория пуста'
 
+        # Диалоговое окно удаления категории и задач в ней
         message_box = QMessageBox()
         message_box.setIcon(QMessageBox.Question)
         message_box.setWindowTitle(
@@ -715,28 +831,41 @@ class MainWindow(QMainWindow):
             return None
 
         elif retval == 1024:    # accept
-            print('accepted')
+            # Удаление категории и задач в ней
 
-            con.exec(
-                f'DELETE FROM categories WHERE name="{category_name}"'
+            category_delete = QSqlQuery()
+            category_delete.prepare(
+                """
+                DELETE FROM categories WHERE name=?
+                """
             )
+            category_delete.addBindValue(category_name)
+            category_delete.exec()
 
             self.set_categories()
 
-            con.exec(
-                f'DELETE FROM tasks WHERE category_id={category_id}'
+            tasks_delete = QSqlQuery()
+            tasks_delete.prepare(
+                """
+                DELETE FROM tasks WHERE category_id=?
+                """
             )
+            tasks_delete.addBindValue(category_id)
+            tasks_delete.exec()
 
-            self.set_all_tasks()
+            self.set_tasks()
             self.unselect_task()
 
-            print(f'category {category_name} deleted')
-
     def delete_task(self):
+        """
+        Удаление задачи
+        """
+
+        # Получение id задачи
         task = self.sender()
         task_id = task.objectName().split('_')[1]
-        print(task_id)
 
+        # Диалогове окно удаления задачи
         message_box = QMessageBox()
         message_box.setIcon(QMessageBox.Question)
         message_box.setWindowTitle(
@@ -755,21 +884,29 @@ class MainWindow(QMainWindow):
             return None
 
         elif retval == 1024:    # accept
-            print('accepted')
+            # Удаление задачи
 
-            con.exec(
-                f'DELETE FROM tasks WHERE id={task_id}'
+            task_delete = QSqlQuery()
+            task_delete.prepare(
+                """
+                DELETE FROM tasks WHERE id=?
+                """
             )
+            task_delete.addBindValue(task_id)
+            task_delete.exec()
 
-        self.set_all_tasks()
+        self.set_tasks()
         self.unselect_task()
 
     def load_settings(self):
+        # Загрузка настроек
+
         settings_file = open('settings.json')
         settings_data = json.load(
             settings_file
         )
 
+        # Установка настроек в GUI
         in_tray = settings_data.get('in_tray')
         notifications = settings_data.get('notifications')
 
@@ -777,10 +914,12 @@ class MainWindow(QMainWindow):
         self.notifications_option.setChecked(notifications)
 
     def change_settings(self):
+        """
+        Изменение настроек
+        """
+
         in_tray = self.in_tray_option.isChecked()
         notifications = self.notifications_option.isChecked()
-
-        print(in_tray, notifications)
 
         new_settings = {
             'in_tray': in_tray,
@@ -791,6 +930,9 @@ class MainWindow(QMainWindow):
         settings_file.write(json.dumps(new_settings))
 
     def show_quotation_msg(self):
+        """
+        Уведомление с мотивирующей цитатой
+        """
         message_box = QMessageBox()
         message_box.setIcon(QMessageBox.Information)
         message_box.setWindowTitle(
@@ -802,7 +944,10 @@ class MainWindow(QMainWindow):
 
         message_box.exec_()
 
-    def show_notification(self, signal):
+    def show_deadline_msg(self, signal_data):
+        """
+        Показ уведомления о дедлайне задачи. Работает только при активированныз уведомлениях
+        """
         if not self.notifications_option.isChecked():
             return None
 
@@ -811,7 +956,7 @@ class MainWindow(QMainWindow):
             'Task manager'
         )
         notification.setText(
-            f'До дедлайна задачи "{signal[0]}" осталось {signal[1]} минут(a)'
+            f'До дедлайна задачи "{signal_data[0]}" осталось {signal_data[1]} минут(a)'
         )
         notification.setIcon(
             notification.Information
@@ -819,6 +964,10 @@ class MainWindow(QMainWindow):
         notification.exec_()
 
     def closeEvent(self, event):
+        # Если выбрано "Свернуть в трей", то окно сворачивается в трей
+        # если не выбрано, то закрывается
+        # сворачивание работает только при активированном сворачивании
+
         if self.in_tray_option.isChecked():
             event.ignore()
             self.hide()
@@ -829,6 +978,10 @@ class MainWindow(QMainWindow):
 
 
 class TaskReminder(QThread):
+    """
+    Поток, проверяющий дедлайны задач
+    """
+
     notification_signal = pyqtSignal(list)
 
     def __init__(self):
@@ -838,6 +991,9 @@ class TaskReminder(QThread):
         self.notifications_list = list()
 
     def get_names_and_dates(self) -> dict:
+        """
+        Получение задач, их статуса и дедлайна
+        """
         tasks = con.exec(
             'SELECT name, deadline, status_id FROM tasks'
         )
@@ -845,9 +1001,14 @@ class TaskReminder(QThread):
         final_dict = dict()
 
         while tasks.next():
-            date = datetime.strptime(
-                tasks.value(1), '%Y-%m-%d %H:%M:%S'
-            )
+            try:
+                date = datetime.strptime(
+                    tasks.value(1), '%Y-%m-%d %H:%M:%S'
+                )
+
+            except:
+                continue
+
             status_id = tasks.value(2)
 
             if status_id != 3:
@@ -858,21 +1019,20 @@ class TaskReminder(QThread):
 
     def run(self):
         tasks = self.get_names_and_dates()
-
         now = datetime.now()
 
         for task, deadline in tasks.items():
+            # Определение близости дедлайна задачи
             near = deadline - now
-            print(near)
             near_days = near.days
 
             if near_days == 0:
                 near_minutes = int(near.total_seconds() // 60)
 
                 if near_minutes > 0 and near_minutes <= 15:
-                    if task not in self.notifications_list:
-                        print(task)
+                    # Уведомление о дедлайне, если о нём еще не уведомили
 
+                    if task not in self.notifications_list:
                         self.notifications_list.append(task)
                         self.notification_signal.emit(
                             [task, near_minutes]
