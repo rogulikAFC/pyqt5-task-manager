@@ -1,4 +1,6 @@
 # Планировщик задач
+## Требования 
+**python библиотеки и модули: pyqt5, beatifulsoup4 (bs4), json, requests, datetime, sys, random**
 ## Инструкция
 ### Основые кнопки
 #### Задачи
